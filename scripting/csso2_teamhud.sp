@@ -105,6 +105,8 @@ ConVar g_cvTagInterval;
 ConVar g_cvTagFov;
 ConVar g_cvTagAspect;
 ConVar g_cvTagCharWidth;
+ConVar g_cvTagEnemies;
+ConVar g_cvTagDead;
 
 Handle g_hTimer = null;
 Handle g_hSync = null;
@@ -177,6 +179,8 @@ float g_fTagInterval = 0.05;
 float g_fTagFov = 0.0;
 float g_fTagAspect = 1.7777778;
 float g_fTagCharWidth = 0.008;
+bool  g_bTagEnemies = false;
+bool  g_bTagDead = false;
 float g_fTagHold = 0.2;
 
 public Plugin myinfo =
@@ -248,6 +252,8 @@ public void OnPluginStart()
 	g_cvTagFov     = CreateConVar("csso_tag_fov", "0", "水平视野角 (4:3 下的 fov), 0=自动读取客户端 m_iFOV, 默认 90", FCVAR_NOTIFY, true, 0.0, true, 179.0);
 	g_cvTagAspect  = CreateConVar("csso_tag_aspect", "1.7778", "客户端画面宽高比: 16:9=1.7778, 16:10=1.6, 4:3=1.3333", FCVAR_NOTIFY, true, 1.0, true, 3.0);
 	g_cvTagCharWidth = CreateConVar("csso_tag_char_width", "0.008", "用于居中名牌的单个字符宽度估算 (0.004 - 0.020)", FCVAR_NOTIFY, true, 0.002, true, 0.05);
+	g_cvTagEnemies = CreateConVar("csso_tag_enemies", "0", "1=敌方玩家也显示头顶名牌 (注意: 比赛服会被视为透视辅助, 默认只显示同队)", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+	g_cvTagDead    = CreateConVar("csso_tag_dead", "0", "1=阵亡的玩家也显示名牌 (显示 [阵亡]), 0=只显示活着的", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
 	CreateConVar("csso_hud_version", "2.2.0", "CSSO 2.0 版本号", FCVAR_NOTIFY | FCVAR_DONTRECORD);
 
@@ -276,6 +282,8 @@ public void OnPluginStart()
 	g_cvTagFov.AddChangeHook(OnConVarChanged);
 	g_cvTagAspect.AddChangeHook(OnConVarChanged);
 	g_cvTagCharWidth.AddChangeHook(OnConVarChanged);
+	g_cvTagEnemies.AddChangeHook(OnConVarChanged);
+	g_cvTagDead.AddChangeHook(OnConVarChanged);
 
 	g_hCookie = RegClientCookie("csso2_hud", "CSSO 2.0 队友头显开关", CookieAccess_Private);
 	g_hTagCookie = RegClientCookie("csso2_tags", "CSSO 2.0 头顶名牌开关", CookieAccess_Private);
@@ -747,6 +755,8 @@ void RefreshSettings()
 	g_fTagFov         = g_cvTagFov.FloatValue;
 	g_fTagAspect      = g_cvTagAspect.FloatValue;
 	g_fTagCharWidth   = g_cvTagCharWidth.FloatValue;
+	g_bTagEnemies     = g_cvTagEnemies.BoolValue;
+	g_bTagDead        = g_cvTagDead.BoolValue;
 	g_fTagHold        = g_fTagInterval + 0.10;
 }
 
@@ -1870,6 +1880,14 @@ void BuildTagText(int target, char[] buffer, int maxlen)
 	char name[MAX_NAME_LENGTH];
 	GetClientName(target, name, sizeof(name));
 
+	if (!IsPlayerAlive(target))
+	{
+		char dead[24];
+		PickText(dead, sizeof(dead), " [DEAD]", " [阵亡]");
+		Format(buffer, maxlen, "%s%s", name, dead);
+		return;
+	}
+
 	if (g_iTagMode == 2)
 	{
 		strcopy(buffer, maxlen, name);
@@ -1948,8 +1966,9 @@ void DrawTagsForClient(int client)
 	}
 
 	int team = GetClientTeam(client);
+	bool viewerOnTeam = (team == CS_TEAM_T || team == CS_TEAM_CT);
 
-	if (!IsClientInGame(client) || (team != CS_TEAM_T && team != CS_TEAM_CT))
+	if (!IsClientInGame(client) || (!viewerOnTeam && !g_bTagEnemies))
 	{
 		if (g_iPrevTags[client] > 0)
 		{
@@ -1966,12 +1985,25 @@ void DrawTagsForClient(int client)
 
 	for (int i = 1; i <= MaxClients && drawn < MAX_TAG_SLOTS; i++)
 	{
-		if (i == client || !IsClientInGame(i) || !IsPlayerAlive(i))
+		if (i == client || !IsClientInGame(i))
 		{
 			continue;
 		}
 
-		if (GetClientTeam(i) != team)
+		if (!IsPlayerAlive(i) && !g_bTagDead)
+		{
+			continue;
+		}
+
+		int otherTeam = GetClientTeam(i);
+
+		if (otherTeam != CS_TEAM_T && otherTeam != CS_TEAM_CT)
+		{
+			// 观察者 / SourceTV
+			continue;
+		}
+
+		if (!g_bTagEnemies && otherTeam != team)
 		{
 			continue;
 		}
