@@ -66,6 +66,11 @@
 #define TAG_COLOR_FIXED     1           // csso_tag_color 1 = 固定黄
 #define TAG_COLOR_HEALTH    2           // csso_tag_color 2 = 按血量变色
 
+// csso_tag_extra 位开关: 名牌上额外显示什么 (可相加)
+#define TAG_EXTRA_MONEY     1           // 经济
+#define TAG_EXTRA_WEAPON    2           // 当前武器
+#define TAG_EXTRA_UTILITY   4           // 道具 / 装备
+
 enum WeaponCategory
 {
 	WPN_NONE = 0,
@@ -107,6 +112,7 @@ ConVar g_cvTagAspect;
 ConVar g_cvTagCharWidth;
 ConVar g_cvTagEnemies;
 ConVar g_cvTagDead;
+ConVar g_cvTagExtra;
 
 Handle g_hTimer = null;
 Handle g_hSync = null;
@@ -180,7 +186,8 @@ float g_fTagFov = 0.0;
 float g_fTagAspect = 1.7777778;
 float g_fTagCharWidth = 0.008;
 bool  g_bTagEnemies = false;
-bool  g_bTagDead = false;
+bool  g_bTagDead = true;
+int   g_iTagExtra = 3;
 float g_fTagHold = 0.2;
 
 public Plugin myinfo =
@@ -188,7 +195,7 @@ public Plugin myinfo =
 	name        = "CSSO 2.0 - Team HUD",
 	author      = "Faker1147",
 	description = "队友头显: 名字 / 经济 / 武器 / 道具 + 头顶名牌 (CSSO 2.0 / CS:S / CS:GO)",
-	version     = "2.2.0",
+	version     = "2.3.0",
 	url         = "https://github.com/Faker1147/csso-teamhud"
 };
 
@@ -231,7 +238,7 @@ public void OnPluginStart()
 	g_cvInterval   = CreateConVar("csso_hud_interval", "0.2", "头显刷新间隔 (秒), 建议 0.1 - 0.5", FCVAR_NOTIFY, true, 0.05, true, 5.0);
 	g_cvMaxRows    = CreateConVar("csso_hud_max_rows", "5", "最多显示几名队友", FCVAR_NOTIFY, true, 1.0, true, 8.0);
 	g_cvDetail     = CreateConVar("csso_hud_detail", "2", "显示级别: 0=名字+金钱, 1=+生命/护甲/武器, 2=+道具/装备", FCVAR_NOTIFY, true, 0.0, true, 2.0);
-	g_cvShowSelf   = CreateConVar("csso_hud_show_self", "1", "是否把自己也显示在头显中", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+	g_cvShowSelf   = CreateConVar("csso_hud_show_self", "0", "是否把自己也显示在头显列表里 (0 = 只看别人)", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvAliveOnly  = CreateConVar("csso_hud_alive_only", "0", "1=只显示存活队友, 0=阵亡队友也显示(标记 DEAD)", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvShowHealth = CreateConVar("csso_hud_health", "1", "是否显示生命值和护甲", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvSort       = CreateConVar("csso_hud_sort", "1", "排序方式: 0=玩家顺序, 1=金钱从高到低", FCVAR_NOTIFY, true, 0.0, true, 1.0);
@@ -253,9 +260,10 @@ public void OnPluginStart()
 	g_cvTagAspect  = CreateConVar("csso_tag_aspect", "1.7778", "客户端画面宽高比: 16:9=1.7778, 16:10=1.6, 4:3=1.3333", FCVAR_NOTIFY, true, 1.0, true, 3.0);
 	g_cvTagCharWidth = CreateConVar("csso_tag_char_width", "0.008", "用于居中名牌的单个字符宽度估算 (0.004 - 0.020)", FCVAR_NOTIFY, true, 0.002, true, 0.05);
 	g_cvTagEnemies = CreateConVar("csso_tag_enemies", "0", "1=敌方玩家也显示头顶名牌 (注意: 比赛服会被视为透视辅助, 默认只显示同队)", FCVAR_NOTIFY, true, 0.0, true, 1.0);
-	g_cvTagDead    = CreateConVar("csso_tag_dead", "0", "1=阵亡的玩家也显示名牌 (显示 [阵亡]), 0=只显示活着的", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+	g_cvTagDead    = CreateConVar("csso_tag_dead", "1", "1=阵亡的玩家也显示名牌 (显示 [阵亡] + 经济), 0=只显示活着的", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+	g_cvTagExtra   = CreateConVar("csso_tag_extra", "3", "名牌额外信息(位开关, 可相加): 1=经济($), 2=当前武器, 4=道具/装备; 7=全都要, 0=只要名字+血量%", FCVAR_NOTIFY, true, 0.0, true, 7.0);
 
-	CreateConVar("csso_hud_version", "2.2.0", "CSSO 2.0 版本号", FCVAR_NOTIFY | FCVAR_DONTRECORD);
+	CreateConVar("csso_hud_version", "2.3.0", "CSSO 2.0 版本号", FCVAR_NOTIFY | FCVAR_DONTRECORD);
 
 	g_cvEnabled.AddChangeHook(OnConVarChanged);
 	g_cvInterval.AddChangeHook(OnConVarChanged);
@@ -284,6 +292,7 @@ public void OnPluginStart()
 	g_cvTagCharWidth.AddChangeHook(OnConVarChanged);
 	g_cvTagEnemies.AddChangeHook(OnConVarChanged);
 	g_cvTagDead.AddChangeHook(OnConVarChanged);
+	g_cvTagExtra.AddChangeHook(OnConVarChanged);
 
 	g_hCookie = RegClientCookie("csso2_hud", "CSSO 2.0 队友头显开关", CookieAccess_Private);
 	g_hTagCookie = RegClientCookie("csso2_tags", "CSSO 2.0 头顶名牌开关", CookieAccess_Private);
@@ -475,9 +484,9 @@ public Action Command_TagTest(int client, int args)
 	char buffer[256];
 	DumpLine(client, "[CSSO 2.0] ===== tag test =====");
 
-	Format(buffer, sizeof(buffer), "tag: enabled=%d mode=%d color=%d interval=%.3f height=%.1f dist=%.0f visibleOnly=%d",
-		g_bTagEnabled ? 1 : 0, g_iTagMode, g_iTagColorMode, g_fTagInterval, g_fTagHeight,
-		g_fTagMaxDist, g_bTagVisibleOnly ? 1 : 0);
+	Format(buffer, sizeof(buffer), "tag: enabled=%d mode=%d color=%d extra=%d dead=%d enemies=%d interval=%.3f height=%.1f dist=%.0f visibleOnly=%d",
+		g_bTagEnabled ? 1 : 0, g_iTagMode, g_iTagColorMode, g_iTagExtra, g_bTagDead ? 1 : 0,
+		g_bTagEnemies ? 1 : 0, g_fTagInterval, g_fTagHeight, g_fTagMaxDist, g_bTagVisibleOnly ? 1 : 0);
 	DumpLine(client, buffer);
 
 	Format(buffer, sizeof(buffer), "proj: fov=%.1f (cvar %.1f, m_iFOV %d) aspect=%.4f charWidth=%.4f",
@@ -757,6 +766,7 @@ void RefreshSettings()
 	g_fTagCharWidth   = g_cvTagCharWidth.FloatValue;
 	g_bTagEnemies     = g_cvTagEnemies.BoolValue;
 	g_bTagDead        = g_cvTagDead.BoolValue;
+	g_iTagExtra       = g_cvTagExtra.IntValue;
 	g_fTagHold        = g_fTagInterval + 0.10;
 }
 
@@ -1874,53 +1884,110 @@ bool TagIsVisible(int viewer, int target)
 	return !TR_DidHit();
 }
 
-// 名牌正文: 名字 + 血量% [+ 当前武器]
+// 手里当前的武器 (没有就退主武器, 再退副武器)
+bool GetActiveWeaponDisplayName(int target, char[] buffer, int maxlen, int zhMinLang)
+{
+	int weapon = GetEntPropEnt(target, Prop_Send, "m_hActiveWeapon");
+
+	if (weapon <= 0 || !IsValidEntity(weapon))
+	{
+		weapon = GetPlayerWeaponSlot(target, CS_SLOT_PRIMARY);
+	}
+
+	if (weapon <= 0)
+	{
+		weapon = GetPlayerWeaponSlot(target, CS_SLOT_SECONDARY);
+	}
+
+	if (weapon <= 0)
+	{
+		return false;
+	}
+
+	return GetWeaponDisplayName(weapon, buffer, maxlen, zhMinLang);
+}
+
+// 名牌正文: 名字 + 血量% [+ 经济] [+ 当前武器] [+ 道具/装备]
+//           阵亡的玩家: 名字 [阵亡] [+ 经济]
 void BuildTagText(int target, char[] buffer, int maxlen)
 {
 	char name[MAX_NAME_LENGTH];
+	char part[192];
 	GetClientName(target, name, sizeof(name));
+
+	// 99 = 强制英文, 只有 csso_hud_lang 2 才用中文武器名
+	int zhMin = (g_iLang >= 2) ? 2 : 99;
 
 	if (!IsPlayerAlive(target))
 	{
 		char dead[24];
 		PickText(dead, sizeof(dead), " [DEAD]", " [阵亡]");
 		Format(buffer, maxlen, "%s%s", name, dead);
-		return;
 	}
-
-	if (g_iTagMode == 2)
+	else if (g_iTagMode == 2)
 	{
 		strcopy(buffer, maxlen, name);
+	}
+	else
+	{
+		int health = GetEntProp(target, Prop_Data, "m_iHealth");
+		if (health < 0)
+		{
+			health = 0;
+		}
+		Format(buffer, maxlen, "%s %d%%", name, health);
+	}
+
+	if ((g_iTagExtra & TAG_EXTRA_MONEY) != 0)
+	{
+		Format(part, sizeof(part), " $%d", CssoGetMoney(target));
+		StrCat(buffer, maxlen, part);
+	}
+
+	if (!IsPlayerAlive(target))
+	{
+		// 阵亡了就没武器/道具好看了
 		return;
 	}
 
-	int health = GetEntProp(target, Prop_Data, "m_iHealth");
-	if (health < 0)
+	if ((g_iTagExtra & TAG_EXTRA_WEAPON) != 0 || g_iTagMode == 1)
 	{
-		health = 0;
-	}
-
-	if (g_iTagMode == 1)
-	{
-		// 99 = 强制英文, 只有 csso_hud_lang 2 才用中文武器名
-		int zhMin = (g_iLang >= 2) ? 2 : 99;
 		char weapon[32];
 		weapon[0] = '\0';
 
-		int slot = GetPlayerWeaponSlot(target, CS_SLOT_PRIMARY);
-		if (slot <= 0)
+		if (GetActiveWeaponDisplayName(target, weapon, sizeof(weapon), zhMin))
 		{
-			slot = GetPlayerWeaponSlot(target, CS_SLOT_SECONDARY);
-		}
-
-		if (slot > 0 && GetWeaponDisplayName(slot, weapon, sizeof(weapon), zhMin))
-		{
-			Format(buffer, maxlen, "%s %d%% %s", name, health, weapon);
-			return;
+			Format(part, sizeof(part), " %s", weapon);
+			StrCat(buffer, maxlen, part);
 		}
 	}
 
-	Format(buffer, maxlen, "%s %d%%", name, health);
+	if ((g_iTagExtra & TAG_EXTRA_UTILITY) != 0)
+	{
+		char primary[64];
+		char secondary[64];
+		char utility[160];
+		char extras[64];
+		primary[0] = '\0';
+		secondary[0] = '\0';
+		utility[0] = '\0';
+		extras[0] = '\0';
+
+		CollectEquipment(target, primary, sizeof(primary), secondary, sizeof(secondary),
+			utility, sizeof(utility), extras, sizeof(extras), true);
+
+		if (utility[0] != '\0')
+		{
+			Format(part, sizeof(part), " %s", utility);
+			StrCat(buffer, maxlen, part);
+		}
+
+		if (extras[0] != '\0')
+		{
+			Format(part, sizeof(part), " %s", extras);
+			StrCat(buffer, maxlen, part);
+		}
+	}
 }
 
 void GetTagColor(int target, int &red, int &green, int &blue)
@@ -2034,7 +2101,7 @@ void DrawTagsForClient(int client)
 			continue;
 		}
 
-		char text[128];
+		char text[256];
 		BuildTagText(i, text, sizeof(text));
 
 		// 水平居中: 估算文本宽度后把左上角往左挪半个宽度
