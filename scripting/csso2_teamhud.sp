@@ -113,6 +113,7 @@ ConVar g_cvTagCharWidth;
 ConVar g_cvTagEnemies;
 ConVar g_cvTagDead;
 ConVar g_cvTagExtra;
+ConVar g_cvTagAimOnly;
 
 Handle g_hTimer = null;
 Handle g_hSync = null;
@@ -188,6 +189,7 @@ float g_fTagCharWidth = 0.008;
 bool  g_bTagEnemies = false;
 bool  g_bTagDead = true;
 int   g_iTagExtra = 3;
+bool  g_bTagAimOnly = true;
 float g_fTagHold = 0.2;
 
 public Plugin myinfo =
@@ -195,7 +197,7 @@ public Plugin myinfo =
 	name        = "CSSO 2.0 - Team HUD",
 	author      = "Faker1147",
 	description = "队友头显: 名字 / 经济 / 武器 / 道具 + 头顶名牌 (CSSO 2.0 / CS:S / CS:GO)",
-	version     = "2.3.0",
+	version     = "2.4.0",
 	url         = "https://github.com/Faker1147/csso-teamhud"
 };
 
@@ -262,8 +264,9 @@ public void OnPluginStart()
 	g_cvTagEnemies = CreateConVar("csso_tag_enemies", "0", "1=敌方玩家也显示头顶名牌 (注意: 比赛服会被视为透视辅助, 默认只显示同队)", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvTagDead    = CreateConVar("csso_tag_dead", "1", "1=阵亡的玩家也显示名牌 (显示 [阵亡] + 经济), 0=只显示活着的", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvTagExtra   = CreateConVar("csso_tag_extra", "3", "名牌额外信息(位开关, 可相加): 1=经济($), 2=当前武器, 4=道具/装备; 7=全都要, 0=只要名字+血量%", FCVAR_NOTIFY, true, 0.0, true, 7.0);
+	g_cvTagAimOnly = CreateConVar("csso_tag_aim_only", "1", "1=只在准星指着别人时才显示名牌 (CS:GO 那种, 默认), 0=只要在视野里就一直显示", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
-	CreateConVar("csso_hud_version", "2.3.0", "CSSO 2.0 版本号", FCVAR_NOTIFY | FCVAR_DONTRECORD);
+	CreateConVar("csso_hud_version", "2.4.0", "CSSO 2.0 版本号", FCVAR_NOTIFY | FCVAR_DONTRECORD);
 
 	g_cvEnabled.AddChangeHook(OnConVarChanged);
 	g_cvInterval.AddChangeHook(OnConVarChanged);
@@ -293,6 +296,7 @@ public void OnPluginStart()
 	g_cvTagEnemies.AddChangeHook(OnConVarChanged);
 	g_cvTagDead.AddChangeHook(OnConVarChanged);
 	g_cvTagExtra.AddChangeHook(OnConVarChanged);
+	g_cvTagAimOnly.AddChangeHook(OnConVarChanged);
 
 	g_hCookie = RegClientCookie("csso2_hud", "CSSO 2.0 队友头显开关", CookieAccess_Private);
 	g_hTagCookie = RegClientCookie("csso2_tags", "CSSO 2.0 头顶名牌开关", CookieAccess_Private);
@@ -484,9 +488,14 @@ public Action Command_TagTest(int client, int args)
 	char buffer[256];
 	DumpLine(client, "[CSSO 2.0] ===== tag test =====");
 
-	Format(buffer, sizeof(buffer), "tag: enabled=%d mode=%d color=%d extra=%d dead=%d enemies=%d interval=%.3f height=%.1f dist=%.0f visibleOnly=%d",
+	Format(buffer, sizeof(buffer), "tag: enabled=%d mode=%d color=%d extra=%d dead=%d enemies=%d aimOnly=%d interval=%.3f height=%.1f dist=%.0f visibleOnly=%d",
 		g_bTagEnabled ? 1 : 0, g_iTagMode, g_iTagColorMode, g_iTagExtra, g_bTagDead ? 1 : 0,
-		g_bTagEnemies ? 1 : 0, g_fTagInterval, g_fTagHeight, g_fTagMaxDist, g_bTagVisibleOnly ? 1 : 0);
+		g_bTagEnemies ? 1 : 0, g_bTagAimOnly ? 1 : 0, g_fTagInterval, g_fTagHeight,
+		g_fTagMaxDist, g_bTagVisibleOnly ? 1 : 0);
+	DumpLine(client, buffer);
+
+	Format(buffer, sizeof(buffer), "aim: 准星当前指着的客户端 = %d (-1 = 没指着人)",
+		GetClientAimTarget(client, true));
 	DumpLine(client, buffer);
 
 	Format(buffer, sizeof(buffer), "proj: fov=%.1f (cvar %.1f, m_iFOV %d) aspect=%.4f charWidth=%.4f",
@@ -767,6 +776,7 @@ void RefreshSettings()
 	g_bTagEnemies     = g_cvTagEnemies.BoolValue;
 	g_bTagDead        = g_cvTagDead.BoolValue;
 	g_iTagExtra       = g_cvTagExtra.IntValue;
+	g_bTagAimOnly     = g_cvTagAimOnly.BoolValue;
 	g_fTagHold        = g_fTagInterval + 0.10;
 }
 
@@ -2048,6 +2058,10 @@ void DrawTagsForClient(int client)
 	float eye[3];
 	GetClientEyePosition(client, eye);
 
+	// csso_tag_aim_only: 只给"准星正指着的那个人"画牌子 (CS:GO 默认行为)
+	// GetClientAimTarget 自己会做射线判定, 所以隔着墙指着不算, 也不用再单独判可见性。
+	int aimTarget = g_bTagAimOnly ? GetClientAimTarget(client, true) : -1;
+
 	int drawn = 0;
 
 	for (int i = 1; i <= MaxClients && drawn < MAX_TAG_SLOTS; i++)
@@ -2075,6 +2089,12 @@ void DrawTagsForClient(int client)
 			continue;
 		}
 
+		if (g_bTagAimOnly && i != aimTarget)
+		{
+			// 准星没指着这个人
+			continue;
+		}
+
 		float pos[3];
 		GetTagWorldPos(i, pos);
 
@@ -2096,7 +2116,7 @@ void DrawTagsForClient(int client)
 			continue;
 		}
 
-		if (g_bTagVisibleOnly && !TagIsVisible(client, i))
+		if (!g_bTagAimOnly && g_bTagVisibleOnly && !TagIsVisible(client, i))
 		{
 			continue;
 		}
