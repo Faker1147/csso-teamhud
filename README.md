@@ -1,6 +1,7 @@
 # CSSO 2.0 — 队友头显 (Team HUD)
 
-> CS 服务器插件（**CSSO 2.0** / CS:S / CS:GO）：在 HUD 上实时显示**队友的名字 / 经济 / 武器 / 道具**。
+> CS 服务器插件（**CSSO 2.0** / CS:S / CS:GO）：在 HUD 上实时显示**队友的名字 / 经济 / 武器 / 道具**，
+> 并把**队友的名字 + 血量% 浮动显示在头顶**（CS:GO 那种"队友信息牌"）。
 
 [![Build](https://github.com/Faker1147/csso-teamhud/actions/workflows/build.yml/badge.svg)](https://github.com/Faker1147/csso-teamhud/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/Faker1147/csso-teamhud?include_prereleases&label=release)](https://github.com/Faker1147/csso-teamhud/releases)
@@ -12,11 +13,22 @@
 
 ## 效果预览
 
+### 1）屏幕角落的队友信息条
+
 ```
 CSSO 2.0  |  T  |  Money $12450 (avg $2490)  |  Alive 3/5
 > PlayerOne  $4750  100HP 100AP+  AK-47 30/90  USP-S 12/24  FLASHx2 SMOKE HE KIT
 > Two  $3200  87HP 100AP  AWP 10/30  GLOCK 20/120  SMOKE MOLLY
 > Three  $0  [DEAD]
+```
+
+### 2）头顶名牌（`csso_tag_enabled 1`，默认开）
+
+```
+                 [ 队友名字 100% ]        <- 浮在头顶的牌子 (队伍色 / 黄色 / 血量色)
+                        ●
+                       /|\                 <- 队友
+                       / \
 ```
 
 | 片段 | 含义 |
@@ -66,15 +78,19 @@ CS 引擎，所以插件只把识别结果写进日志，真正的兼容性交�
 
 ## 功能
 
+- **头顶名牌（NEW）**：队友名字 + 血量% 浮在头顶（可选带当前武器），像 CS:GO 的队友信息牌；
+  只画给同队看，可选"被墙挡住就不显示"，所以不会变成透视
 - **经济**：每人当前金钱 + 队伍总经济 + 人均
 - **武器**：主武器 / 副武器，带 `弹匣/备弹`（读不到备弹时自动省略）
 - **道具**：闪光弹、烟雾弹、高爆手雷、燃烧瓶、燃烧弹、诱饵弹、战术手雷，支持 `x2` 计数
 - **装备**：拆弹器 KIT、C4、电击枪 ZEUS、医疗针 MEDSHOT、护甲与头盔
 - **排序**：默认按金钱从高到低，最多显示 N 名队友
-- **玩家开关**：`!teamhud` 自己关掉，用 Cookie 持久化，换图不掉
-- **配置丰富**：坐标 / 刷新间隔 / 显示级别 / 颜色 / 生死过滤，共 12 个 CVar，改完即时生效
-- **健壮性**：所有网络属性偏移查找失败都有降级路径；`csso_hud_debug 1`（偏移）与
-  `sm_csso_dump`（单个玩家的完整实测数据）双通道排错
+- **配色**：`csso_hud_color 5` 每行独立状态色（阵亡灰 / 残血红 / 掉血橙），
+  `6` = CSSO 2.0 原生队伍色（取自模组 `clientscheme.res` 的 TeamT / TeamCT）
+- **语言**：`csso_hud_lang 1` 中文标签 + 投掷物/装备，`2` 再加武器中文名（需客户端字体支持中文）
+- **玩家开关**：`!teamhud` 关信息条，`!tags` 关头顶名牌，都用 Cookie 持久化，换图不掉
+- **健壮性**：所有网络属性偏移查找失败都有降级路径；`csso_hud_debug 1`（偏移）、
+  `sm_csso_dump`（实测数据）、`sm_csso_tagtest`（名牌投影参数）、`sm_csso_fonttest`（字体）四通道排错
 
 ---
 
@@ -107,7 +123,7 @@ CS 引擎，所以插件只把识别结果写进日志，真正的兼容性交�
 发布新版本：
 
 ```bash
-git tag v2.1.0 && git push origin v2.1.0
+git tag v2.2.0 && git push origin v2.2.0
 ```
 
 ### 方法二：本地 spcomp
@@ -139,13 +155,18 @@ Linux 执行 `./compile.sh`，输出在 `scripting/compiled/`。
 
 | 命令 | 权限 | 说明 |
 | --- | --- | --- |
-| `sm_teamhud` / `sm_thud` | 所有人 | 开关自己的头显（Cookie 保存，换图/重进仍生效） |
+| `sm_teamhud` / `sm_thud` | 所有人 | 开关自己的头显信息条（Cookie 保存，换图/重进仍生效） |
+| `sm_tags` | 所有人 | 开关自己的头顶名牌（Cookie 保存） |
 | `sm_csso_reload` | 服务器管理 | 重新加载配置并重启刷新定时器 |
-| `sm_csso_dump` | 服务器管理 | 把**你本人**的实测数据（引擎识别值、所有属性偏移、每把武器的类名/弹匣/弹药类型/备弹、当前 HUD 行）打到控制台和 SourceMod 日志，用来排错 |
+| `sm_csso_dump` | 服务器管理 | 把**你本人**的实测数据（引擎识别值、所有属性偏移、每把武器的类名/弹匣/弹药类型/备弹、当前配置、当前 HUD 行）打到控制台和 SourceMod 日志，用来排错 |
+| `sm_csso_tagtest` | 服务器管理 | 打印名牌的投影参数（FOV / 宽高比 / 每名队友的屏幕坐标 / 是否可见），名牌位置不对时用它调参 |
+| `sm_csso_fonttest` | 服务器管理 | 在 HUD 上显示中英文样张各 12 秒，用来判断你的客户端 HUD 字体能否渲染中文 |
 
 ---
 
 ## CVar
+
+### 信息条
 
 | CVar | 默认 | 说明 |
 | --- | --- | --- |
@@ -158,8 +179,25 @@ Linux 执行 `./compile.sh`，输出在 `scripting/compiled/`。
 | `csso_hud_health` | 1 | 显示血量 / 护甲 / 头盔 |
 | `csso_hud_sort` | 1 | 0 = 玩家顺序，1 = 按金钱排序 |
 | `csso_hud_x` / `csso_hud_y` | 0.02 / 0.40 | 屏幕坐标（0 ~ 1），默认避开雷达和血条 |
-| `csso_hud_color` | 0 | 0 = 队伍色(T橙/CT蓝)，1 白，2 绿，3 橙，4 青 |
+| `csso_hud_color` | 0 | 0 = 队伍色(T橙/CT蓝)，1 白，2 绿，3 橙，4 青，5 = 每行状态色，6 = CSSO 2.0 原生队伍色 |
+| `csso_hud_lang` | 0 | 0 = 英文，1 = 中文标签+投掷物/装备，2 = 再加武器中文名 |
+| `csso_hud_line_height` | 0.025 | `csso_hud_color 5` 时每行的高度（行会重叠/间隔过大时调它） |
 | `csso_hud_debug` | 0 | 1 = 把引擎识别值和所有属性偏移打到服务器控制台 |
+
+### 头顶名牌
+
+| CVar | 默认 | 说明 |
+| --- | --- | --- |
+| `csso_tag_enabled` | 1 | 总开关（玩家仍可用 `!tags` 单独关掉） |
+| `csso_tag_mode` | 0 | 0 = 名字+血量%，1 = 再加当前武器，2 = 只有名字 |
+| `csso_tag_color` | 0 | 0 = 队伍色，1 = 固定黄（截图那种），2 = 按血量变色 |
+| `csso_tag_max_dist` | 3000 | 最大显示距离（游戏单位），0 = 不限 |
+| `csso_tag_height` | 12 | 名牌相对队友**眼睛**的高度（蹲下时会跟着降低） |
+| `csso_tag_visible_only` | 1 | 1 = 被墙挡住时不显示（防透视），0 = 一直显示 |
+| `csso_tag_interval` | 0.05 | 名牌刷新间隔（秒），越小越平滑但越耗带宽，建议 0.02 ~ 0.10 |
+| `csso_tag_fov` | 0 | 水平视野角（4:3 基准的 fov），0 = 自动读客户端 `m_iFOV`（默认 90） |
+| `csso_tag_aspect` | 1.7778 | 客户端画面宽高比：16:9 = 1.7778，16:10 = 1.6，4:3 = 1.3333 |
+| `csso_tag_char_width` | 0.008 | 居中用的单字符宽度估算，名牌整体偏左/偏右时调它 |
 
 ---
 
@@ -196,9 +234,21 @@ csso-teamhud/
 - **护甲/头盔/拆弹器**：`m_ArmorValue` / `m_bHasHelmet` / `m_bHasDefuser`（两平台同类名）。
 - **属性查找全部多类名回退**：`CCSPlayer` → `CBasePlayer` / `CCSWeaponBase` / `CBaseCombatWeapon`，
   某个属性整条链都找不到时只影响对应字段并写一条 `LogError`，不会让插件失效。
-- **HUD 只输出 ASCII**：CS:GO 的 HUD 字体渲染中文会乱码或丢失，因此画面内全部英文缩写；
-  中文只出现在注释、配置、聊天提示和本文档中。
-- 客户端开关用 `clientprefs` Cookie 持久化。
+- **HUD 默认只输出 ASCII**：中文是 `csso_hud_lang` 显式开启的可选项。
+  原因：Source 引擎的 HUD 文本用的是客户端 `clientscheme.res` 里的字体，CS:S / CS:GO 的默认
+  HUD 字体对 UTF-8 中文支持很差（方块或直接不显示）。所以先用 `sm_csso_fonttest` 实测你的客户端
+  能不能渲染中文，能渲染再开 `csso_hud_lang 1/2`，不能渲染就得换客户端 HUD 字体。
+- **头顶名牌不是世界实体**：CSSO 2.0 的引擎里既没有 `point_worldtext`（世界坐标文字实体，
+  实测 client/server.dll 里都没有），也没有 CS:GO 的 `cl_teamid_overhead_always`。
+  插件自己算投影：取队友眼睛位置 + `csso_tag_height` 得到世界坐标 →
+  用观察者的 `GetClientEyePosition` / `GetClientEyeAngles` / `GetAngleVectors` 得到相机基向量 →
+  按 `fov`（4:3 基准的水平视野角，垂直视野固定，宽屏只是横向变宽）+ `csso_tag_aspect` 投影成
+  屏幕坐标 0~1 → 每个名牌用**一条独立 HUD 通道**（`g_hTagSync[i]`）画在这个坐标上，
+  所以多个名牌能同时出现在不同位置。
+- **名牌防透视**：只遍历同队且活着的队友；`csso_tag_visible_only 1` 时用
+  `TR_TraceRayFilter`（`MASK_VISIBLE`，只挡墙不挡人）从观察者眼睛打到队友眼睛，中间有东西
+  就不画；还有 `csso_tag_max_dist` 距离限制。**永远不会**显示敌人。
+- 客户端开关用 `clientprefs` Cookie 持久化（`csso2_hud` / `csso2_tags`）。
 
 ---
 
@@ -212,6 +262,20 @@ csso-teamhud/
    能直接看出是哪个属性没读到（偏移全 `-1` 就是属性名不对）。
 4. 控制台 `csso_hud_debug 1` 后换图，检查偏移是否都打印出有效值。
 5. 位置可能被雷达/血条挡住，调 `csso_hud_x` / `csso_hud_y`。
+
+**头顶名牌位置不对 / 不显示？**
+
+1. `sm_csso_tagtest`：会打印 FOV、宽高比，以及每名队友算出来的屏幕坐标和"是否可见"。
+   - **完全没有**队友的行 → 队友在身后或视野外，正常。
+   - 有行但 `visible=0` → 被墙挡住了（`csso_tag_visible_only 1` 时会隐藏），
+     站在开阔地再看一次；或者就是真的隔着墙。
+2. **名牌整体偏高 / 偏低** → 调 `csso_tag_height`（相对眼睛的高度，默认 12）。
+3. **名牌整体偏左 / 偏右（没对准头顶）** → 调 `csso_tag_char_width`（默认 0.008；
+   偏右说明估宽太小就调大，偏左就调小）。
+4. **站着对得上、宽屏对不上** → 把 `csso_tag_aspect` 改成你客户端的真实宽高比
+   （16:9 = 1.7778，16:10 = 1.6，4:3 = 1.3333），或直接把 `csso_tag_fov` 设成 90。
+5. **卡顿** → 调大 `csso_tag_interval`（默认 0.05 = 20 次/秒），或调小 `csso_tag_max_dist`。
+6. 玩家自己可以用 `!tags` 一键关掉。
 
 **为什么旧版本在 CSSO 2.0 上直接报错不加载？**
 2.0.0 版本硬编码了"只在 CS:GO 上运行"，而 CSSO 2.0 是 Source 2013 + `csso` gamedir，
@@ -227,11 +291,14 @@ csso-teamhud/
 在 `CacheOffsets()` 里改属性名。
 
 **能显示敌人的吗？**
-刻意不做 —— 那就是透视外挂，比赛服必然违规。本插件只显示同队。
+刻意不做 —— 那就是透视外挂，比赛服必然违规。本插件只显示同队（信息条和头顶名牌都是）。
 
-**为什么没有中文？**
-CS:GO 的 HUD 字体对 UTF-8 中文支持很差。若你服务器换了支持中文的 HUD 字体，
-把 `BuildWeaponData()` 里的显示名改成中文即可。
+**中文怎么开？**
+1. 先 `sm_csso_fonttest`，看那三行中文样张能不能正常显示。
+2. 能 → `csso_hud_lang 1`（中文标签 + 投掷物/装备）或 `2`（再加武器中文名）。
+3. 显示成方块/空白 → 你的客户端 HUD 字体不支持中文，需要替换客户端
+   `resource/clientscheme.res` 里的 HUD 字体（换成含中文的 TTF），属于客户端改动，
+   不是服务器插件能解决的。注意**队友名字**也一样受这个字体限制。
 
 ---
 
