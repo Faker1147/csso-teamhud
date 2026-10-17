@@ -1,0 +1,21 @@
+# ---- 编译产物 ----
+*.smx
+compiled/
+build/
+
+# ---- 编译器 / 工具链 ----
+spcomp
+spcomp.exe
+spcomp64
+spcomp64.exe
+sourcemod-*/
+*.tar.gz
+*.zip
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.user
+*.suo
+Thumbs.db
+desktop.ini

@@ -1,0 +1,77 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 编译 csso2_teamhud.smx
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载最新的 SourceMod (Linux)
+        run: |
+          set -euo pipefail
+          url=$(curl -sSL https://api.github.com/repos/alliedmodders/sourcemod/releases/latest \
+                | grep -oE '"browser_download_url": *"[^"]*linux\.tar\.gz"' \
+                | head -n1 | cut -d'"' -f4)
+          echo "SourceMod 包: $url"
+          curl -sSL "$url" -o /tmp/sourcemod.tar.gz
+          mkdir -p /tmp/sm
+          tar -xzf /tmp/sourcemod.tar.gz -C /tmp/sm
+          chmod +x /tmp/sm/addons/sourcemod/scripting/spcomp
+          echo "--- spcomp 版本 ---"
+          /tmp/sm/addons/sourcemod/scripting/spcomp | head -n2 || true
+
+      - name: 编译插件
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          /tmp/sm/addons/sourcemod/scripting/spcomp \
+            scripting/csso2_teamhud.sp \
+            -obuild/csso2_teamhud.smx
+          ls -l build/
+
+      - name: 上传编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: csso2_teamhud
+          path: build/*.smx
+          if-no-files-found: error
+
+  release:
+    name: 发布 Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: csso2_teamhud
+
+      - name: 创建 / 更新 Release 并附带 .smx
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" csso2_teamhud.smx --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" csso2_teamhud.smx \
+              --title "CSSO 2.0 - $GITHUB_REF_NAME" \
+              --generate-notes
+          fi

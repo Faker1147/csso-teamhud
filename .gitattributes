@@ -1,0 +1,14 @@
+# 统一换行，避免 Windows / Linux 之间来回 diff
+* text=auto
+
+# SourcePawn 源码
+*.sp   text
+*.inc  text
+*.cfg  text
+*.cfg.example text
+
+# Windows 批处理必须保持 CRLF
+*.bat  text eol=crlf
+
+# 二进制
+*.smx  binary
