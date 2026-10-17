@@ -10,12 +10,22 @@
  *      > 道具      (闪光弹 x2、烟雾弹、高爆手雷、燃烧瓶、燃烧弹、诱饵弹、战术手雷)
  *      > 装备      (拆弹器 KIT、C4、电击枪 ZEUS)
  *
- *  平台: Counter-Strike: Global Offensive (legacy) + SourceMod 1.11 / 1.12
+ *  适用平台:
+ *      > CSSO 2.0 / Source Offensive  (Source 2013 + cstrike 内容, appID 240)
+ *      > Counter-Strike: Source
+ *      > Counter-Strike: Global Offensive (legacy)
  *
  *  注意: SourceMod 官方至今不支持 CS2 (Counter-Strike 2)。
  *        CS2 服务器请使用 CounterStrikeSharp (C#) 版本, 本插件无法在 CS2 上运行。
  *
+ *  引擎差异处理:
+ *      > 金钱/护甲/头盔/拆弹器/武器列表: CS:S 与 CS:GO 属性相同 (CCSPlayer::m_iAccount 等)
+ *      > 备弹: CS:GO 用武器自带的 m_iPrimaryReserveAmmoCount;
+ *              CS:S / CSSO 用玩家 m_iAmmo 数组 + 武器的 m_iPrimaryAmmoType
+ *      > 手雷数量: CS:GO 是 1 + 备弹; CS:S / CSSO 是 m_iAmmo[弹药类型]
+ *
  *  编译: spcomp csso2_teamhud.sp      (SourceMod 1.11+, 推荐 1.12)
+ *  调试: csso_hud_debug 1 后换图, 或游戏内 sm_csso_dump 打印实测属性
  * ============================================================================
  */
 
@@ -28,7 +38,8 @@
 #include <clientprefs>
 
 #define HUD_TAG             "CSSO 2.0"
-#define CS_MAX_WEAPONS      64          // CS:GO 的 MAX_WEAPONS
+#define CS_MAX_WEAPONS      64          // MAX_WEAPONS (CS:S / CSSO / CS:GO 都是 64)
+#define CS_MAX_AMMO_TYPES   32          // MAX_AMMO_TYPES, m_iAmmo 数组长度上限
 #define HUD_BUFFER_SIZE     1024
 #define LINE_BUFFER_SIZE    200
 
@@ -79,6 +90,14 @@ int g_iArmorOffset = -1;
 int g_iHelmetOffset = -1;
 int g_iDefuserOffset = -1;
 
+// CS:S / CSSO 专用: 备弹在玩家身上 (m_iAmmo 数组), 用武器的 m_iPrimaryAmmoType 索引
+int  g_iAmmoArrayOffset = -1;
+int  g_iAmmoArraySize = CS_MAX_AMMO_TYPES;
+int  g_iAmmoTypeOffset = -1;
+bool g_bAmmoTypeTried = false;
+
+EngineVersion g_Engine = Engine_Unknown;
+
 // 缓存后的设置
 bool  g_bEnabled = true;
 float g_fInterval = 0.2;
@@ -97,10 +116,10 @@ bool  g_bDebug = false;
 public Plugin myinfo =
 {
 	name        = "CSSO 2.0 - Team HUD",
-	author      = "CSSO",
-	description = "队友头显: 名字 / 经济 / 武器 / 道具 (CS:GO)",
-	version     = "2.0.0",
-	url         = ""
+	author      = "Faker1147",
+	description = "队友头显: 名字 / 经济 / 武器 / 道具 (CSSO 2.0 / CS:S / CS:GO)",
+	version     = "2.1.0",
+	url         = "https://github.com/Faker1147/csso-teamhud"
 };
 
 // ---------------------------------------------------------------------------
@@ -108,10 +127,15 @@ public Plugin myinfo =
 // ---------------------------------------------------------------------------
 public void OnPluginStart()
 {
-	if (GetEngineVersion() != Engine_CSGO)
+	g_Engine = GetEngineVersion();
+
+	// CSSO 2.0 是自定义 gamedir (csso) 的 Source 2013 模组, 引擎识别值不一定是标准 CS 引擎,
+	// 所以这里只警告、不拦载; 真正的兼容性交给 CacheOffsets() 的多类名查找和降级逻辑。
+	if (g_Engine != Engine_CSGO && g_Engine != Engine_CSS
+		&& g_Engine != Engine_SDK2013 && g_Engine != Engine_Unknown)
 	{
-		SetFailState("CSSO 2.0 只能运行在 CS:GO 上 (SourceMod 目前不支持 CS2)。");
-		return;
+		LogMessage("[CSSO 2.0] 引擎识别为 %d, 不是标准 CS 引擎; 头显仍会尝试工作。",
+			view_as<int>(g_Engine));
 	}
 
 	g_hWeaponName = new StringMap();
@@ -133,7 +157,7 @@ public void OnPluginStart()
 	g_cvColorMode  = CreateConVar("csso_hud_color", "0", "颜色: 0=跟随队伍, 1=白, 2=绿, 3=橙, 4=青", FCVAR_NOTIFY, true, 0.0, true, 4.0);
 	g_cvDebug      = CreateConVar("csso_hud_debug", "0", "1=把偏移信息输出到服务器控制台", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
-	CreateConVar("csso_hud_version", "2.0.0", "CSSO 2.0 版本号", FCVAR_NOTIFY | FCVAR_DONTRECORD);
+	CreateConVar("csso_hud_version", "2.1.0", "CSSO 2.0 版本号", FCVAR_NOTIFY | FCVAR_DONTRECORD);
 
 	g_cvEnabled.AddChangeHook(OnConVarChanged);
 	g_cvInterval.AddChangeHook(OnConVarChanged);
@@ -153,6 +177,7 @@ public void OnPluginStart()
 	RegConsoleCmd("sm_teamhud", Command_ToggleHud, "开关 CSSO 2.0 队友头显");
 	RegConsoleCmd("sm_thud", Command_ToggleHud, "开关 CSSO 2.0 队友头显");
 	RegAdminCmd("sm_csso_reload", Command_Reload, ADMFLAG_CONFIG, "重新载入 CSSO 2.0 头显设置");
+	RegAdminCmd("sm_csso_dump", Command_Dump, ADMFLAG_CONFIG, "打印本地玩家的实测属性 (排查头显不显示/数值不对)");
 
 	AutoExecConfig(true, "csso2");
 	CacheOffsets();
@@ -161,6 +186,9 @@ public void OnPluginStart()
 
 public void OnMapStart()
 {
+	// 换图后重找: 部分属性 (datamap) 只有在武器实体存在时才能查到
+	g_iAmmoTypeOffset = -1;
+	g_bAmmoTypeTried = false;
 	CacheOffsets();
 }
 
@@ -254,6 +282,84 @@ public Action Command_Reload(int client, int args)
 	return Plugin_Handled;
 }
 
+void DumpLine(int client, const char[] text)
+{
+	PrintToConsole(client, "%s", text);
+	LogMessage("%s", text);
+}
+
+// sm_csso_dump: 把实测的属性值打到玩家控制台 + SourceMod 日志, 用来确认引擎差异
+public Action Command_Dump(int client, int args)
+{
+	if (client == 0)
+	{
+		ReplyToCommand(client, "[CSSO 2.0] Run this in game.");
+		return Plugin_Handled;
+	}
+
+	char buffer[256];
+
+	DumpLine(client, "[CSSO 2.0] ===== dump start =====");
+
+	Format(buffer, sizeof(buffer), "engine=%d (Unknown=0, CSGO=12, CSS=13, SDK2013=14)", view_as<int>(g_Engine));
+	DumpLine(client, buffer);
+
+	Format(buffer, sizeof(buffer), "offsets: account=%d prAccount=%d weapons=%d clip=%d reserve=%d ammoArray=%d(size=%d) ammoType=%d armor=%d helmet=%d defuser=%d",
+		g_iAccountOffset, g_iPlayerResourceAccountOffset, g_iMyWeaponsOffset, g_iClipOffset,
+		g_iReserveAmmoOffset, g_iAmmoArrayOffset, g_iAmmoArraySize, g_iAmmoTypeOffset,
+		g_iArmorOffset, g_iHelmetOffset, g_iDefuserOffset);
+	DumpLine(client, buffer);
+
+	Format(buffer, sizeof(buffer), "me: money=$%d health=%d armor=%d helmet=%d defuser=%d",
+		CssoGetMoney(client), GetEntProp(client, Prop_Data, "m_iHealth"),
+		CssoGetArmor(client), CssoHasHelmet(client) ? 1 : 0, CssoHasDefuser(client) ? 1 : 0);
+	DumpLine(client, buffer);
+
+	int weapons[CS_MAX_WEAPONS];
+	int count = CollectWeapons(client, weapons, sizeof(weapons));
+
+	Format(buffer, sizeof(buffer), "weapons=%d (m_hMyWeapons found=%d)",
+		count, g_iMyWeaponsOffset != -1 ? 1 : 0);
+	DumpLine(client, buffer);
+
+	for (int i = 0; i < count; i++)
+	{
+		int weapon = weapons[i];
+		char classname[64];
+		char display[32];
+
+		if (!GetEntityClassname(weapon, classname, sizeof(classname)))
+		{
+			continue;
+		}
+
+		if (!GetWeaponDisplayName(weapon, display, sizeof(display)))
+		{
+			strcopy(display, sizeof(display), "?");
+		}
+
+		int category = GetWeaponCategory(weapon);
+		int ammoType = CssoGetAmmoType(weapon);
+		int value = (category == view_as<int>(WPN_UTILITY))
+			? CssoGetUtilityCount(client, weapon)
+			: CssoGetReserveAmmo(client, weapon);
+
+		Format(buffer, sizeof(buffer), "  ent=%d class=%s name=%s cat=%d clip=%d ammoType=%d reserve_or_count=%d",
+			weapon, classname, display, category, CssoGetClip(weapon), ammoType, value);
+		DumpLine(client, buffer);
+	}
+
+	char line[LINE_BUFFER_SIZE];
+	FormatTeammateLine(client, line, sizeof(line));
+	Format(buffer, sizeof(buffer), "hud line -> %s", line);
+	DumpLine(client, buffer);
+
+	DumpLine(client, "[CSSO 2.0] ===== dump end (also in SourceMod log) =====");
+	ReplyToCommand(client, "[CSSO 2.0] Dump written to your console and the SourceMod log.");
+
+	return Plugin_Handled;
+}
+
 // ---------------------------------------------------------------------------
 // 设置 / 定时器
 // ---------------------------------------------------------------------------
@@ -326,26 +432,72 @@ public Action Timer_DrawHud(Handle timer)
 // ---------------------------------------------------------------------------
 // 网络属性偏移
 // ---------------------------------------------------------------------------
-void CacheOffsets()
+// 依次尝试多个类名, 返回第一个查到的偏移 (-1 = 都没找到)
+int FindPropOffsetAny(const char[] prop, const char[] classA, const char[] classB = "", const char[] classC = "")
 {
-	g_iAccountOffset = FindSendPropInfo("CCSPlayer", "m_iAccount");
-	if (g_iAccountOffset == -1)
+	int offset = FindSendPropInfo(classA, prop);
+
+	if (offset == -1 && classB[0] != '\0')
 	{
-		g_iPlayerResourceAccountOffset = FindSendPropInfo("CCSPlayerResource", "m_iAccount");
+		offset = FindSendPropInfo(classB, prop);
 	}
 
-	g_iMyWeaponsOffset    = FindSendPropInfo("CCSPlayer", "m_hMyWeapons");
-	g_iClipOffset         = FindSendPropInfo("CBaseCombatWeapon", "m_iClip1");
-	g_iReserveAmmoOffset  = FindSendPropInfo("CBaseCombatWeapon", "m_iPrimaryReserveAmmoCount");
-	g_iArmorOffset        = FindSendPropInfo("CCSPlayer", "m_ArmorValue");
-	g_iHelmetOffset       = FindSendPropInfo("CCSPlayer", "m_bHasHelmet");
-	g_iDefuserOffset      = FindSendPropInfo("CCSPlayer", "m_bHasDefuser");
+	if (offset == -1 && classC[0] != '\0')
+	{
+		offset = FindSendPropInfo(classC, prop);
+	}
+
+	return offset;
+}
+
+void CacheOffsets()
+{
+	// 金钱: CS:S (含 CSSO 2.0) 与 CS:GO 都在 CCSPlayer 上, 找不到再退回玩家资源实体
+	g_iAccountOffset = FindSendPropInfo("CCSPlayer", "m_iAccount");
+	g_iPlayerResourceAccountOffset = FindSendPropInfo("CCSPlayerResource", "m_iAccount");
+
+	// 护甲 / 头盔 / 拆弹器: 两个引擎都在 CCSPlayer 上
+	g_iArmorOffset   = FindPropOffsetAny("m_ArmorValue", "CCSPlayer", "CBasePlayer");
+	g_iHelmetOffset  = FindPropOffsetAny("m_bHasHelmet", "CCSPlayer", "CBasePlayer");
+	g_iDefuserOffset = FindPropOffsetAny("m_bHasDefuser", "CCSPlayer", "CBasePlayer");
+
+	// 武器列表: 定义在 CBaseCombatCharacter, CCSPlayer 的发送表里同样能查到
+	g_iMyWeaponsOffset = FindPropOffsetAny("m_hMyWeapons", "CCSPlayer", "CBaseCombatCharacter", "CBasePlayer");
+
+	// 弹匣 / CS:GO 的备弹属性
+	g_iClipOffset        = FindPropOffsetAny("m_iClip1", "CBaseCombatWeapon", "CCSWeaponBase");
+	g_iReserveAmmoOffset = FindPropOffsetAny("m_iPrimaryReserveAmmoCount", "CBaseCombatWeapon", "CCSWeaponBase");
+
+	// CS:S / CSSO 的备弹: 玩家身上的 m_iAmmo 数组, 用武器的弹药类型索引
+	PropFieldType fieldType = view_as<PropFieldType>(0);
+	int numBits = 0;
+	int localOffset = 0;
+	int arraySize = 0;
+
+	g_iAmmoArrayOffset = FindSendPropInfo("CBasePlayer", "m_iAmmo", fieldType, numBits, localOffset, arraySize);
+	if (g_iAmmoArrayOffset == -1)
+	{
+		g_iAmmoArrayOffset = FindSendPropInfo("CCSPlayer", "m_iAmmo", fieldType, numBits, localOffset, arraySize);
+	}
+
+	if (arraySize > 0 && arraySize <= CS_MAX_AMMO_TYPES)
+	{
+		g_iAmmoArraySize = arraySize;
+	}
+
+	// 武器的弹药类型 (CS:S 里常是 datamap, 需要武器实体存在时才能定位 -> 懒加载)
+	g_iAmmoTypeOffset = FindPropOffsetAny("m_iPrimaryAmmoType", "CBaseCombatWeapon", "CCSWeaponBase");
+	if (g_iAmmoTypeOffset == -1)
+	{
+		g_bAmmoTypeTried = false;
+	}
 
 	if (g_bDebug)
 	{
-		PrintToServer("[CSSO 2.0] offsets: account=%d prAccount=%d weapons=%d clip=%d reserve=%d armor=%d helmet=%d defuser=%d",
-			g_iAccountOffset, g_iPlayerResourceAccountOffset, g_iMyWeaponsOffset,
-			g_iClipOffset, g_iReserveAmmoOffset, g_iArmorOffset, g_iHelmetOffset, g_iDefuserOffset);
+		PrintToServer("[CSSO 2.0] engine=%d (CSGO=12,CSS=13,SDK2013=14) | account=%d prAccount=%d weapons=%d clip=%d reserve=%d ammoArray=%d(size %d) armor=%d helmet=%d defuser=%d",
+			view_as<int>(g_Engine), g_iAccountOffset, g_iPlayerResourceAccountOffset, g_iMyWeaponsOffset,
+			g_iClipOffset, g_iReserveAmmoOffset, g_iAmmoArrayOffset, g_iAmmoArraySize,
+			g_iArmorOffset, g_iHelmetOffset, g_iDefuserOffset);
 	}
 
 	if (g_iAccountOffset == -1 && g_iPlayerResourceAccountOffset == -1)
@@ -356,6 +508,11 @@ void CacheOffsets()
 	if (g_iMyWeaponsOffset == -1)
 	{
 		LogError("[CSSO 2.0] 找不到 m_hMyWeapons, 将退回武器槽位方式 (道具统计可能不完整)。");
+	}
+
+	if (g_iReserveAmmoOffset == -1 && g_iAmmoArrayOffset == -1)
+	{
+		LogError("[CSSO 2.0] 找不到备弹属性 (m_iPrimaryReserveAmmoCount 和 m_iAmmo 都没有), 备弹与手雷数量将不显示。");
 	}
 }
 
@@ -417,13 +574,84 @@ int CssoGetClip(int weapon)
 	return GetEntData(weapon, g_iClipOffset);
 }
 
-int CssoGetReserveAmmo(int weapon)
+// 武器的弹药类型索引 (CS:S 里 m_iPrimaryAmmoType 通常是 datamap, 需要真实实体才能定位)
+int CssoGetAmmoType(int weapon)
 {
-	if (g_iReserveAmmoOffset == -1)
+	if (g_iAmmoTypeOffset != -1)
 	{
-		return -1;
+		return GetEntData(weapon, g_iAmmoTypeOffset);
 	}
-	return GetEntData(weapon, g_iReserveAmmoOffset);
+
+	if (!g_bAmmoTypeTried)
+	{
+		g_bAmmoTypeTried = true;
+		g_iAmmoTypeOffset = FindDataMapInfo(weapon, "m_iPrimaryAmmoType");
+
+		if (g_bDebug && g_iAmmoTypeOffset != -1)
+		{
+			PrintToServer("[CSSO 2.0] m_iPrimaryAmmoType (datamap) offset = %d", g_iAmmoTypeOffset);
+		}
+	}
+
+	if (g_iAmmoTypeOffset != -1)
+	{
+		return GetEntData(weapon, g_iAmmoTypeOffset);
+	}
+
+	return -1;
+}
+
+// 备弹: 优先玩家 m_iAmmo 数组 (CS:S / CSSO / CS:GO 都通用), 再退回 CS:GO 的武器自带备弹
+int CssoGetReserveAmmo(int player, int weapon)
+{
+	int ammoType = CssoGetAmmoType(weapon);
+
+	if (ammoType >= 0 && ammoType < g_iAmmoArraySize && g_iAmmoArrayOffset != -1)
+	{
+		int reserve = GetEntData(player, g_iAmmoArrayOffset + (ammoType * 4));
+		if (reserve >= 0)
+		{
+			return reserve;
+		}
+	}
+
+	if (g_iReserveAmmoOffset != -1)
+	{
+		int reserve = GetEntData(weapon, g_iReserveAmmoOffset);
+		if (reserve >= 0)
+		{
+			return reserve;
+		}
+	}
+
+	return -1;
+}
+
+// 投掷物数量: CS:S / CSSO 直接读 m_iAmmo[弹药类型]; CS:GO 退回 1 + 武器备弹
+int CssoGetUtilityCount(int player, int weapon)
+{
+	int ammoType = CssoGetAmmoType(weapon);
+
+	if (ammoType >= 0 && ammoType < g_iAmmoArraySize && g_iAmmoArrayOffset != -1)
+	{
+		int count = GetEntData(player, g_iAmmoArrayOffset + (ammoType * 4));
+		if (count > 0)
+		{
+			return count;
+		}
+	}
+
+	if (g_iReserveAmmoOffset != -1)
+	{
+		int extra = GetEntData(weapon, g_iReserveAmmoOffset);
+		if (extra > 0)
+		{
+			return extra + 1;
+		}
+	}
+
+	// 至少手里这一颗
+	return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -523,11 +751,13 @@ void BuildWeaponData()
 	// 主武器
 	AddWeaponData("weapon_ak47", "AK-47", WPN_PRIMARY);
 	AddWeaponData("weapon_m4a1", "M4A4", WPN_PRIMARY);
+	AddWeaponData("weapon_m4a4", "M4A4", WPN_PRIMARY);          // CSSO 2.0 用的类名
 	AddWeaponData("weapon_m4a1_silencer", "M4A1-S", WPN_PRIMARY);
 	AddWeaponData("weapon_awp", "AWP", WPN_PRIMARY);
 	AddWeaponData("weapon_ssg08", "SSG08", WPN_PRIMARY);
 	AddWeaponData("weapon_aug", "AUG", WPN_PRIMARY);
 	AddWeaponData("weapon_sg556", "SG553", WPN_PRIMARY);
+	AddWeaponData("weapon_sg553", "SG553", WPN_PRIMARY);        // CSSO 2.0 用的类名
 	AddWeaponData("weapon_galilar", "GALIL", WPN_PRIMARY);
 	AddWeaponData("weapon_famas", "FAMAS", WPN_PRIMARY);
 	AddWeaponData("weapon_g3sg1", "G3SG1", WPN_PRIMARY);
@@ -542,8 +772,15 @@ void BuildWeaponData()
 	AddWeaponData("weapon_p90", "P90", WPN_PRIMARY);
 	AddWeaponData("weapon_bizon", "BIZON", WPN_PRIMARY);
 
+	// 霰弹枪 (之前漏了, CS:GO 和 CSSO 2.0 都有)
+	AddWeaponData("weapon_nova", "NOVA", WPN_PRIMARY);
+	AddWeaponData("weapon_xm1014", "XM1014", WPN_PRIMARY);
+	AddWeaponData("weapon_mag7", "MAG-7", WPN_PRIMARY);
+	AddWeaponData("weapon_sawedoff", "SAWEDOFF", WPN_PRIMARY);
+
 	// 副武器
 	AddWeaponData("weapon_glock", "GLOCK", WPN_SECONDARY);
+	AddWeaponData("weapon_glock18", "GLOCK", WPN_SECONDARY);    // CSSO 2.0 用的类名
 	AddWeaponData("weapon_usp_silencer", "USP-S", WPN_SECONDARY);
 	AddWeaponData("weapon_hkp2000", "P2000", WPN_SECONDARY);
 	AddWeaponData("weapon_elite", "DUAL", WPN_SECONDARY);
@@ -560,6 +797,7 @@ void BuildWeaponData()
 	AddWeaponData("weapon_hegrenade", "HE", WPN_UTILITY);
 	AddWeaponData("weapon_molotov", "MOLLY", WPN_UTILITY);
 	AddWeaponData("weapon_incgrenade", "INC", WPN_UTILITY);
+	AddWeaponData("weapon_incendiarygrenade", "INC", WPN_UTILITY);  // CSSO 2.0 用的类名
 	AddWeaponData("weapon_decoy", "DECOY", WPN_UTILITY);
 	AddWeaponData("weapon_tagrenade", "TA", WPN_UTILITY);
 
@@ -601,7 +839,7 @@ void CollectEquipment(int player, char[] primary, int primaryLen, char[] seconda
 				}
 
 				int clip = CssoGetClip(weapon);
-				int reserve = CssoGetReserveAmmo(weapon);
+				int reserve = CssoGetReserveAmmo(player, weapon);
 
 				if (clip >= 0 && reserve >= 0)
 				{
@@ -640,13 +878,13 @@ void CollectEquipment(int player, char[] primary, int primaryLen, char[] seconda
 					continue;
 				}
 
-				// 手里的 1 颗 + 备弹里的额外数量 (例如 2 颗闪光)
-				int extra = CssoGetReserveAmmo(weapon);
+				// CS:S / CSSO: m_iAmmo[弹药类型] 就是颗数; CS:GO: 1 + 武器备弹
+				int grenadeCount = CssoGetUtilityCount(player, weapon);
 				char tag[48];
 
-				if (extra > 0)
+				if (grenadeCount > 1)
 				{
-					Format(tag, sizeof(tag), "%sx%d", display, extra + 1);
+					Format(tag, sizeof(tag), "%sx%d", display, grenadeCount);
 				}
 				else
 				{
