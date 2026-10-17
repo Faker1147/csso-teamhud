@@ -60,6 +60,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: csso2_teamhud
@@ -67,6 +70,7 @@ jobs:
       - name: 创建 / 更新 Release 并附带 .smx
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
