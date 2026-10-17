@@ -197,7 +197,7 @@ public Plugin myinfo =
 	name        = "CSSO 2.0 - Team HUD",
 	author      = "Faker1147",
 	description = "队友头显: 名字 / 经济 / 武器 / 道具 + 头顶名牌 (CSSO 2.0 / CS:S / CS:GO)",
-	version     = "2.4.0",
+	version     = "2.4.1",
 	url         = "https://github.com/Faker1147/csso-teamhud"
 };
 
@@ -208,12 +208,12 @@ public void OnPluginStart()
 {
 	g_Engine = GetEngineVersion();
 
-	// CSSO 2.0 是自定义 gamedir (csso) 的 Source 2013 模组, 引擎识别值不一定是标准 CS 引擎,
-	// 所以这里只警告、不拦载; 真正的兼容性交给 CacheOffsets() 的多类名查找和降级逻辑。
+	// CSSO 2.0 是自定义 gamedir (csso) 的 Source 2013 模组, 引擎识别值不一定是标准 CS 引擎枚举值,
+	// 这里只记录一条信息、不拦载; 真正的兼容性交给 CacheOffsets() 的多类名查找和降级逻辑。
 	if (g_Engine != Engine_CSGO && g_Engine != Engine_CSS
 		&& g_Engine != Engine_SDK2013 && g_Engine != Engine_Unknown)
 	{
-		LogMessage("[CSSO 2.0] 引擎识别为 %d, 不是标准 CS 引擎; 头显仍会尝试工作。",
+		LogMessage("[CSSO 2.0] 运行在非标准 CS 引擎 (引擎值 %d), 已按 Source 2013 兼容模式工作。",
 			view_as<int>(g_Engine));
 	}
 
@@ -266,7 +266,7 @@ public void OnPluginStart()
 	g_cvTagExtra   = CreateConVar("csso_tag_extra", "3", "名牌额外信息(位开关, 可相加): 1=经济($), 2=当前武器, 4=道具/装备; 7=全都要, 0=只要名字+血量%", FCVAR_NOTIFY, true, 0.0, true, 7.0);
 	g_cvTagAimOnly = CreateConVar("csso_tag_aim_only", "1", "1=只在准星指着别人时才显示名牌 (CS:GO 那种, 默认), 0=只要在视野里就一直显示", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
-	CreateConVar("csso_hud_version", "2.4.0", "CSSO 2.0 版本号", FCVAR_NOTIFY | FCVAR_DONTRECORD);
+	CreateConVar("csso_hud_version", "2.4.1", "CSSO 2.0 版本号", FCVAR_NOTIFY | FCVAR_DONTRECORD);
 
 	g_cvEnabled.AddChangeHook(OnConVarChanged);
 	g_cvInterval.AddChangeHook(OnConVarChanged);
@@ -330,23 +330,9 @@ public void OnConfigsExecuted()
 
 public void OnPluginEnd()
 {
-	if (g_hTimer != null)
-	{
-		delete g_hTimer;
-		g_hTimer = null;
-	}
-
-	if (g_hFontTestTimer != null)
-	{
-		delete g_hFontTestTimer;
-		g_hFontTestTimer = null;
-	}
-
-	if (g_hTagTimer != null)
-	{
-		delete g_hTagTimer;
-		g_hTagTimer = null;
-	}
+	SafeKillTimer(g_hTimer);
+	SafeKillTimer(g_hFontTestTimer);
+	SafeKillTimer(g_hTagTimer);
 
 	ClearAllHuds();
 
@@ -374,6 +360,13 @@ public void OnClientPutInServer(int client)
 {
 	g_bHudPref[client] = true;
 	g_bTagPref[client] = true;
+
+	// 自愈: 万一刷新定时器因为换图 / 重载失效了 (旧版句柄异常的遗留状态),
+	// 有人连进来就把它补起来, 免得整局都不刷新。
+	if ((g_bEnabled && !TimerIsAlive(g_hTimer)) || (g_bTagEnabled && !TimerIsAlive(g_hTagTimer)))
+	{
+		RestartTimer();
+	}
 }
 
 public void OnClientCookiesCached(int client)
@@ -652,7 +645,7 @@ public Action Command_FontTest(int client, int args)
 
 	g_iFontTestTicks[client] = 12;    // 12 秒
 
-	if (g_hFontTestTimer == null)
+	if (!TimerIsAlive(g_hFontTestTimer))
 	{
 		g_hFontTestTimer = CreateTimer(1.0, Timer_FontTest, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 	}
@@ -782,11 +775,7 @@ void RefreshSettings()
 
 void RestartTimer()
 {
-	if (g_hTimer != null)
-	{
-		delete g_hTimer;
-		g_hTimer = null;
-	}
+	SafeKillTimer(g_hTimer);
 
 	if (g_bEnabled && g_fInterval > 0.0)
 	{
@@ -798,15 +787,19 @@ void RestartTimer()
 	}
 
 	RestartTagTimer();
+
+	// 诊断用: csso_hud_debug 1 时记录刷新定时器状态 (排查"换图后不刷新"这类问题)
+	if (g_bDebug)
+	{
+		LogMessage("[debug] RestartTimer: enabled=%d interval=%.2f hudTimer=%s | tagEnabled=%d tagTimer=%s",
+			g_bEnabled ? 1 : 0, g_fInterval, TimerIsAlive(g_hTimer) ? "ok" : "none",
+			g_bTagEnabled ? 1 : 0, TimerIsAlive(g_hTagTimer) ? "ok" : "none");
+	}
 }
 
 void RestartTagTimer()
 {
-	if (g_hTagTimer != null)
-	{
-		delete g_hTagTimer;
-		g_hTagTimer = null;
-	}
+	SafeKillTimer(g_hTagTimer);
 
 	if (g_bTagEnabled && g_fTagInterval > 0.0)
 	{
@@ -823,6 +816,30 @@ void RestartTagTimer()
 			}
 		}
 	}
+}
+
+// 安全关闭定时器 / 判断定时器是否还活着
+// 带 TIMER_FLAG_NO_MAPCHANGE 的定时器会被引擎在换图时自动关闭, 句柄当场失效;
+// 此时再 delete 会抛 "Handle is invalid" 并**中断整个函数** —— 换图 / 第二次开房间后
+// OnConfigsExecuted -> RestartTimer 就是这样中途退出的, 结果新定时器没建起来, 头显再也不刷新。
+void SafeKillTimer(Handle &timer)
+{
+	if (timer == null)
+	{
+		return;
+	}
+
+	if (IsValidHandle(timer))
+	{
+		KillTimer(timer);
+	}
+
+	timer = null;
+}
+
+bool TimerIsAlive(Handle timer)
+{
+	return (timer != null && IsValidHandle(timer));
 }
 
 void ClearAllHuds()
